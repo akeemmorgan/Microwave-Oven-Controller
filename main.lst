@@ -1,0 +1,1301 @@
+
+AVRASM ver. 2.1.42  main.asm Mon Dec 06 19:45:41 2021
+
+main.asm(35): Including file 'm328Pdef.inc'
+main.asm(66): Including file 'iopins.asm'
+main.asm(67): Including file 'util.asm'
+main.asm(68): Including file 'serialio.asm'
+main.asm(69): Including file 'i2c.asm'
+main.asm(70): Including file 'rtcds1307.asm'
+main.asm(71): Including file 'adc.asm'
+main.asm(72): Including file 'andisplay.asm'
+                 
+                 
+                 ;│░█▄█░█▀█░▀█▀░█▀█░░░░█▀█░█▀▀░█▄█│
+                 ;│░█░█░█▀█░░█░░█░█░░░░█▀█░▀▀█░█░█│
+                 ;│░▀░▀░▀░▀░▀▀▀░▀░▀░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░░░░░│
+                 ;│░@student░no░N00427948░░░░░░░░░│
+                 ;└───────────────────────────────┘
+                 
+                 ; General Constants
+                 .equ CLOSED = 0
+                 .equ OPEN = 1
+                 .equ ON = 1
+                 .equ OFF = 0
+                 .equ YES = 1
+                 .equ NO = 0
+                 .equ JCTR = 125 			; Joystick center value
+                 
+                 ; States
+                 .equ STARTS = 0
+                 .equ IDLES = 1
+                 .equ DATAS = 2
+                 .equ COOKS = 3
+                 .equ SUSPENDS = 4
+                 
+                 ; Port Pins
+                 .equ	LIGHT	= 7     	; Door Light WHITE LED PORTD pin 7
+                 .equ	TTABLE	= 6			; Turntable PORTD pin 6 PWM
+                 .equ	BEEPER	= 5			; Beeper PORTD pin 5
+                 .equ	CANCEL	= 4			; Cancel switch PORTD pin 4
+                 .equ	DOOR	= 3			; Door latching switch PORTD pin 3
+                 .equ	STSP	= 2			; Start/Stop switch PORTD pin 2
+                 .equ	HEATER	= 0			; Heater RED LED PORTB pin 0
+                 
+                 .list
+                 
+                 ; S R A M
+                 .dseg
+                 .org SRAM_START
+                 ; Global Data (variables; requires memory)
+                 .dseg
+000100           cstate:		.byte 1			; Current State (reserved at 0x100)
+000101           inputs:		.byte 1			; Current input settings
+000102           joyx:		.byte 1			; Raw joystick x-axis
+000103           joyy:		.byte 1			; Raw joystick y-axis
+000104           joys:		.byte 1			; Joystick status bits 0-not centred,1- centred
+000105           seconds:	.byte 2			; Cook time in seconds (16-bit)
+000107           sec1:		.byte 1			; minor tick time (100 ms)
+000108           tascii: 	.byte 8 		; itoa_short result
+                 
+                 ; Code segment Flash
+                 .cseg
+                 .org 	0x0000
+000000 940c 0344 jmp		start
+                 
+                 ; Start after interrupt vector table
+                 .org	0xF6				; 0x0000 to 0x00F5 reserved words for interrupts
+                 
+                 ; strings to send
+0000f6 6b41
+0000f7 6565
+0000f8 206d
+0000f9 6f4d
+0000fa 6772
+0000fb 6e61
+0000fc 092c
+0000fd 304e
+0000fe 3430
+0000ff 3732
+000100 3439
+000101 2c38
+000102 5409
+000103 6d69
+000104 3a65
+000105 0020
+main.asm(61): warning: .cseg .db misalignment - padding zero byte
+000106 0000      cmsg1:		.db "Akeem Morgan,	N00427948,	Time: ",0,0
+000107 4309
+000108 6f6f
+000109 206b
+00010a 6954
+00010b 656d
+00010c 203a
+00010d 0000      cmsg2:		.db "	Cook Time: ",0,0
+00010e 5309
+00010f 6174
+000110 6574
+000111 203a
+000112 0000      cmsg3:		.db "	State: ",0,0
+                 
+                 ; .asm includes
+                 .include "iopins.asm"		; moved ...
+                 
+                 ;│░▀█▀░█▀█░█▀█░▀█▀░█▀█░█▀▀░░░░█▀█░█▀▀░█▄█│
+                 ;│░░█░░█░█░█▀▀░░█░░█░█░▀▀█░░░░█▀█░▀▀█░█░█│
+                 ;│░▀▀▀░▀▀▀░▀░░░▀▀▀░▀░▀░▀▀▀░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░░░░░░░░░░░░░│
+                 ;│░@student░no░N00427948░░░░░░░░░░░░░░░░░│
+                 ;└───────────────────────────────────────┘
+                 
+                 ; Port Initialization
+                 initPorts:
+000113 b18a      	in		r24,DDRD			; Get the contents of DDRD
+000114 6e80      	ori		r24,0b11100000		; Set Port D pins 5,6,7 to outputs
+000115 b98a      	out		DDRD,r24
+000116 b184      	in		r24,DDRB			; Get the contents of DDRB
+000117 6083      	ori		r24,0b00000011		; Set Port B pins 0,1 to output
+000118 b984      	out		DDRB,r24
+000119 b18a      	in		r24,DDRD
+00011a 7e83      	andi	r24,0b11100011		; Set Port D pins 2,3,4 to inputs
+00011b b98a      	out		DDRD,r24
+00011c b18b      	in		r24,PORTD			; Pull pins 2,3,4 high
+00011d 618c      	ori		r24,0b00011100
+00011e b98b      	out		PORTD,r24
+                 	
+                 ; Timer0 PWM Setup
+                 ; TCCR0A - Timer/Counter Control Register A
+                 ; Phase Correct PWM = WGM02-0,WGM01-0,WGM00 1, PWM TOP - 0xFF, Updates OCRx at TOP, TOV flag Set on Bottom
+                 ; Compare Output Mode = COM0A1-1,COM0A0-0
+00011f e801      	ldi		r16,(1<<COM0A1) | (1<<WGM00) 
+000120 bd04      	out		TCCR0A,r16 ; to timer control port A
+                 
+                 ; TCCCR0B - Timer/Counter Control Register B
+                 ; Prescaler = 1024 - CS02-1,CS01-0,CS00-1, Frequency 61 Hz - 16 mHz/1024/256
+000121 e005      	ldi		r16,(1<<CS02) | (1<<CS00) 
+000122 bd05      	out		TCCR0B,r16
+000123 e000      	ldi		r16,0				; Load 0 count to initially turn off turntable
+000124 bd07      	out		OCR0A,r16
+                 .include "util.asm"
+000125 9508      
+                 ;│░█░█░▀█▀░▀█▀░█░░░░░░█▀█░█▀▀░█▄█│
+                 ;│░█░█░░█░░░█░░█░░░░░░█▀█░▀▀█░█░█│
+                 ;│░▀▀▀░░▀░░▀▀▀░▀▀▀░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░░░░░│
+                 ;│░@student░no░N00427948░░░░░░░░░│
+                 ;└───────────────────────────────┘
+                 
+                 .def ANSL = R0 		;To hold low-byte of answer
+                 .def ANSH = R1 		;To hold high-byte of answer 
+                 .def REML = R2 		;To hold low-byte of remainder
+                 .def REMH = R3 		;To hold high-byte of remainder
+                 .def AL = R16 		;To hold low-byte of dividend
+                 .def AH = R17 		;To hold high-byte of dividend
+                 .def BL = R18 		;To hold low-byte of divisor
+                 .def BH = R19 		;To hold high-byte of divisor 
+                 .def C16 = R20 		;Bit Counter 
+                 
+                 dectab: 
+000126 2710
+000127 03e8
+000128 0064
+000129 000a
+00012a 0001
+00012b 0000      	.dw 10000,1000,100,10,1,0
+                 
+                 ; 100 ms Delay
+                 delay100ms:
+00012c ef2f      	ldi		r18,0xFF		; 0xFF No sim
+00012d ee81      	ldi		r24,0xE1		; 0xE1 No sim
+00012e e094      	ldi		r25,0x04   		; 0x04 No sim
+                 d100:
+00012f 5021      	subi	r18,0x01		; 1
+000130 4080      	sbci	r24,0x00		; 0
+000131 4090      	sbci	r25,0x00		; 0
+000132 f7e1      	brne	d100
+000133 9508      	ret
+                 
+                 ; 1 Second Delay
+                 delay1s:
+000134 e440      	ldi		r20,64
+                 d1:	
+000135 ec58      	ldi		r21,200
+                 d2:	
+000136 ef6a      	ldi		r22,250
+                 d3:	
+000137 0000      	nop
+000138 0000      	nop
+000139 956a      	dec		r22
+00013a f7e1      	brne	d3
+00013b 955a      	dec		r21
+00013c f7c9      	brne	d2
+00013d 954a      	dec		r20
+00013e f7b1      	brne	d1
+00013f 9508      	ret
+                 
+                 ; Packed BCD To ASCII
+                 ; Number to convert in r17
+                 ; Converted output in r17 (upper nibble),r18 (lower nibble)
+                 pBCDToASCII:
+                 	; Lower nibble
+000140 2f21      	mov		r18,r17
+000141 702f      	andi	r18,0x0F
+000142 6320      	ori		r18,0x30
+                 	
+                 	; Upper nibble
+000143 9512      	swap	r17
+000144 701f      	andi	r17,0x0F
+000145 6310      	ori		r17,0x30
+000146 9508      	ret
+                 
+                 ; Byte To Hexadecimal ASCII
+                 ; Number to convert in r17
+                 ; Converted output in r17 (lower nibble),r18 (upper nibble)
+                 byteToHexASCII:
+000147 2f21      	mov		r18, r17			; Save a copy
+000148 701f      	andi	r17, 0x0f			; Mask the upper nibble
+000149 e300      	ldi		r16, 0x30			; Index to '0'
+00014a 301a      	cpi		r17, 10
+00014b f008      	brlo	b1
+00014c e307      	ldi		r16, 0x37			; Index to 'A'
+                 b1:	
+00014d 0f10      	add		r17,r16
+00014e 9522      	swap	r18					; Look at the upper nibble
+00014f 702f      	andi	r18,0x0f			; Mask the upper nibble
+000150 e300      	ldi		r16,0x30			; Index to '0'
+000151 302a      	cpi		r18,10				; Greater than 9?
+000152 f008      	brlo	b2
+000153 e307      	ldi		r16,0x37			; Index to 'A'
+                 b2:	
+000154 0f20      	add		r18,r16
+000155 9508      	ret
+                 
+                 ; Converts unsigned integer value of r17:r16 to ASCII string tascii[5]
+                 itoa_short: 
+000156 e4ec      	ldi 	zl,low(dectab*2) 	; pointer to 10^x power compare value
+000157 e0f2      	ldi 	zh,high(dectab*2) 
+000158 e0a8      	ldi 	xl,low(tascii) 		; pointer to array to store string
+000159 e0b1      	ldi 	xh,high(tascii) 
+                 itoa_lext: 
+00015a e22f      	ldi 	r18,'0'-1 			; (ASCII 0) -1
+00015b 9025      	lpm 	r2,z+ 				; load 10^x word, point to next
+00015c 9035      	lpm 	r3,z+ 
+                 itoa_lint: 
+00015d 9523      	inc 	r18 				; start with '0' ASCII
+00015e 1902      	sub 	r16,r2 				; (## - 10^x
+00015f 0913      	sbc 	r17,r3 
+000160 f7e0      	brsh 	itoa_lint 
+000161 0d02      	add 	r16,r2 				; if negative reconstruct
+000162 1d13      	adc 	r17,r3 
+000163 932d      	st 		x+,r18 				; save 1/10^x count, point to next location to save
+000164 95c8      	lpm 						; read last ZX pointed at from 10^x table in (r0)
+000165 2000      	tst 	r0 					; LAST WORD YET?=0x00
+000166 f799      	brne 	itoa_lext 
+000167 9508      	ret
+                 
+                 ; 16-bit Unsigned Division
+                 div1616: 
+000168 0108      	movw 	ANSH:ANSL,AH:AL 	; Copy dividend into answer
+000169 e141      	ldi 	C16,17 				; Load bit counter
+00016a 1822      	sub 	REML,REML 			; Clear Remainder and Carry
+00016b 2433      	clr 	REMH 
+                 dloop: 
+00016c 1c00      	rol 	ANSL 				; Shift the answer to the left
+00016d 1c11      	rol 	ANSH 
+00016e 954a      	dec 	C16 				; Decrement Counter
+00016f f059      	breq 	ddone 				; Exit if sixteen bits done
+000170 1c22      	rol 	REML 				; Shift remainder to the left
+000171 1c33      	rol 	REMH 
+000172 1a22      	sub 	REML,BL 			; Try to subtract divisor from remainder
+000173 0a33      	sbc 	REMH,BH 
+000174 f420      	brcc 	skip 				; If the result was negative then
+000175 0e22      	add 	REML,BL 			; reverse the subtraction to try again
+000176 1e33      	adc 	REMH,BH 
+000177 9488      	clc 						; Clear Carry Flag so zero shifted into A 
+000178 cff3      	rjmp 	dloop 				; Loop Back
+                 skip: 
+000179 9408      	sec 						; Set Carry Flag to be shifted into A
+00017a cff1      	rjmp 	dloop 
+                 ddone: 
+00017b 9508      	ret
+                 
+                 ; 8-bit Unsigned Division
+                 ; r0 holds answer
+                 ; r2 holds remainder
+                 ; r16 holds dividend
+                 ; r18 holds divisor
+                 ; r20 Bit Counter
+                 div88: 
+00017c e049      	ldi 	r20,9 				; Load bit counter
+00017d 1822      	sub 	r2,r2 				; Clear remainder and Carry
+00017e 2e00      	mov 	r0,r16 				; Copy dividend to answer
+                 loopd8: 
+00017f 1c00      	rol 	r0 					; Shift answer to left
+000180 954a      	dec 	r20 				; Decrement counter
+000181 f041      	breq 	doned8 				; Exit if eight bits done
+000182 1c22      	rol 	r2 					; Shift remainder to the left
+000183 1a22      	sub 	r2,r18 				; Try to subtract the divsor from remainder
+000184 f418      	brcc 	skipd8 				; If result was negative then
+000185 0e22      	add 	r2,r18 				; reverse subtraction to try again
+000186 9488      	clc 						; Clear Carry flag so zero shifted into A
+000187 cff7      	rjmp 	loopd8 
+                 skipd8: 
+000188 9408      	sec 						; Set Carry flag to be shifted into A
+000189 cff5      	rjmp 	loopd8 
+                 doned8: 
+00018a 9508      	ret
+                 .include "serialio.asm"
+                 
+                 ;│░█▀▀░█▀▀░█▀▄░▀█▀░█▀█░█░░░▀█▀░█▀█░░░░█▀█░█▀▀░█▄█│
+                 ;│░▀▀█░█▀▀░█▀▄░░█░░█▀█░█░░░░█░░█░█░░░░█▀█░▀▀█░█░█│
+                 ;│░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░░░░░░░░░░░░░░░░░░░░░│
+                 ;│░@student░no░N00427948░░░░░░░░░░░░░░░░░░░░░░░░░│
+                 ;└───────────────────────────────────────────────┘
+                 
+                 ; Initializes the USART0 to operate in asynchronous mode with baud rate set to
+                 ; 9600. The USART0 is configured to transmit and receive 8-bit data.
+                 initUSART0: 
+00018b e040      	ldi		r20,0 			; set baud rate to 9600 with fOSC = 16MHz
+00018c 9340 00c5 	sts 	UBRR0H,r20 
+00018e e647      	ldi 	r20,0x67 
+00018f 9340 00c4 	sts 	UBRR0L,r20 
+000191 e148      	ldi 	r20,0x18 		; enable transmitter(TXEN),receiver(RXEN),8-bit data
+000192 9340 00c1 	sts 	UCSR0B,r20 
+000194 e046      	ldi 	r20,0x06 		; asynchronous USART, disable parity
+000195 9340 00c2 	sts 	UCSR0C,r20 
+000197 9508      	ret
+                 
+                 ; Outputs the character passed in r16 to MEGA device USART0 
+                 ; using the polling method. The character is less than 9 bits.
+                 putchUSART0: 
+000198 9140 00c0 	lds 	r20,UCSR0A 		; make sure data register is empty before
+00019a ff45      	sbrs 	r20,UDRE0 		; outputting the character
+00019b 940c 0198 	jmp 	putchUSART0 
+00019d 9300 00c6 	sts 	UDR0,r16 		; output the character (less than 9 bits)
+00019f 9508      	ret	
+                 
+                 ; Reads a character from the USART0 module of the MEGA device using 
+                 ; the polling method. The character is returned in r22. 
+                 getchUSART0: 
+0001a0 9140 00c0 	lds 	r20,UCSR0A 		; is there any data to be read?
+0001a2 ff47      	sbrs 	r20,RXC0 
+0001a3 cffc      	rjmp 	getchUSART0 
+0001a4 9160 00c6 	lds 	r22,UDR0 		; fetch the received character
+0001a6 9508      	ret	
+                 
+                 ; move the cursor to the beginning of a line with a Carriage Return (CR) code 0x0D
+                 ; and down a line with the Line Feed (LF) code 0x0A.
+                 newline:
+0001a7 e00d      	ldi 	r16,0x0D 		; (CR)
+0001a8 940e 0198 	call 	putchUSART0
+0001aa e00a      	ldi 	r16,0x0A		; (LF)
+0001ab 940e 0198 	call 	putchUSART0
+0001ad 9508      	ret
+                 
+                 ; Outputs a string pointed to by Z to USART0. The string is stored in
+                 ; program memory or data memory. r16 indicates if the string is in program memory (=1)
+                 ; or data memory (=0). 
+                 putsUSART0: 
+0001ae 3001      	cpi 	r16,1 			; is string in program memory?
+0001af f031      	breq 	pstr 
+                 dstr: 
+0001b0 9101      	ld 		r16,z+ 			; string is in data memory
+0001b1 3000      	cpi 	r16,0 
+0001b2 f049      	breq 	done 			; reach the end of string?
+0001b3 dfe4      	rcall 	putchUSART0 	; output the next character
+0001b4 940c 01b0 	jmp 	dstr 
+                 pstr: 
+0001b6 9105      	lpm 	r16,z+ 			; string is in program memory
+0001b7 3000      	cpi 	r16,0 
+0001b8 f019      	breq 	done 			; reach the end of string?
+0001b9 dfde      	rcall 	putchUSART0 	; output the next character
+0001ba 940c 01b6 	jmp 	pstr 
+                 done: 
+0001bc 9508      	ret
+                 
+                 ; Reads a string from the USART0 of the MEGA device using the polling
+                 ; method by continuously calling putchUSART0 until the carriage return (CR) character is
+                 ; encountered. Register X points to the buffer that holds the received string.
+                 getsUSART0: 
+                 	.equ enter = 0x0D 
+                 ragain: 
+0001bd dfe2      	rcall 	getchUSART0 
+0001be 306d      	cpi 	r22,enter 		; is it an enter character?
+0001bf f419      	brne 	cont 
+0001c0 e030      	ldi 	r19,0 
+0001c1 933c      	st 		X,r19 			; terminate the string with a NULL character
+0001c2 9508      	ret
+                 cont: 
+0001c3 936c      	st 		X,r22 			; save the character in the buffer
+0001c4 2f06      	mov 	r16,r22 		; copy r22 to r16
+0001c5 dfd2      	rcall 	putchUSART0 	; echo the character to USART0 
+0001c6 3068      	cpi 	r22,0x08 		; is it a backspace character?
+0001c7 f449      	brne 	notBS 
+0001c8 95aa      	dec 	XL 				; decrement the X pointer
+0001c9 40b0      	sbci 	XH,0 
+0001ca e200      	ldi 	r16,0x20 		; output a space character
+0001cb 940e 0198 	call 	putchUSART0 
+0001cd e008      	ldi 	r16,0x08 		; output a backspace character
+0001ce dfc9      	rcall 	putchUSART0 
+0001cf 940c 01bd 	jmp 	ragain 
+                 notBS: 
+0001d1 95a3      	inc 	XL 				; increment X pointer
+0001d2 e040      	ldi 	r20,0 
+0001d3 1fb4      	adc 	XH,r20 
+0001d4 cfe8      	rjmp 	ragain 
+                 .include "i2c.asm"
+0001d5 9508      
+                 ;│░▀█▀░▀▀▄░█▀▀░░░░█▀█░█▀▀░█▄█│
+                 ;│░░█░░▄▀░░█░░░░░░█▀█░▀▀█░█░█│
+                 ;│░▀▀▀░▀▀▀░▀▀▀░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░│
+                 ;│░@student░no░N00427948░░░░░│
+                 ;└───────────────────────────┘
+                 
+                 .equ F_SCL = 100000 			; I2C speed 100 KHz
+                 .equ TWISTART = 0xA4 			; Start (TWINT,TWSTA,TWEN)
+                 .equ TWISTOP = 0x94 			; Stop (TWINT,TWSTO,TWEN)
+                 .equ TWIACK = 0xC4 				; Return ACK to slave
+                 .equ TWINACK = 0x84 			; Don't ACK slave
+                 .equ TWISEND = 0x84 			; Send data (TWINT,TWEN)
+                 .equ TWIREADY = TWCR & 0x80 	; Ready when TWINT returns 1
+                 .equ TWISTATUS = TWSR & 0xF8 	; Returns value of status register
+                 
+                 ; I2C Initialization
+                 ; at 16 MHz, the SCL frequency will be 16/(16+2(TWBR)), assuming prescalar of 0.
+                 ; for 100KHz SCL, TWBR = ((F_CPU/F_SCL)-16)/2 = ((16/0.1)-16)/2 = 144/2 = 72.
+                 i2cInit: 
+0001d6 e050      	ldi 	r21,0 
+0001d7 9350 00b9 	sts 	TWSR,r21 		; set prescaler bits to 0
+0001d9 e458      	ldi 	r21,0x48 		; 16 MHz CPU, 100 KHz TWI 72
+0001da 9350 00b8 	sts 	TWBR,r21 
+0001dc e054      	ldi 	r21,(1<<TWEN) 
+0001dd 9350 00bc 	sts 	TWCR,r21 		; Enable TWI
+0001df 9508      	ret 
+                 
+                 ; Looks for device at specified address passed in r23 
+                 i2cDetect: 
+0001e0 ea44      	ldi 	r20,TWISTART 	; Send Start
+0001e1 9340 00bc 	sts 	TWCR,r20 
+0001e3 ebec      	ldi 	r30,TWCR 
+0001e4 e0f0      	ldi 	r31,0x00 
+                 dt1: 
+0001e5 8140      	ld 		r20,Z 
+0001e6 2344      	and 	r20,r20 
+0001e7 f7ec      	brge 	dt1 
+0001e8 9370 00bb 	sts 	TWDR,r23 
+0001ea e884      	ldi 	r24,TWISEND 
+0001eb 9380 00bc 	sts 	TWCR,r24 
+0001ed ebec      	ldi 	r30,TWCR 
+0001ee e0f0      	ldi 	r31,0x00 
+                 dt2: 
+0001ef 8180      	ld 		r24,Z 
+0001f0 2388      	and 	r24,r24 
+0001f1 f7ec      	brge 	dt2 
+0001f2 9140 00b9 	lds 	r20,TWSR 
+0001f4 7b48      	andi 	r20,TWISTATUS 
+0001f5 e081      	ldi 	r24,0x01 
+0001f6 3148      	cpi 	r20,0x18 
+0001f7 f009      	breq 	dt3 
+0001f8 e080      	ldi 	r24,0 
+                 dt3: 
+0001f9 9508      	ret 
+                 
+                 ; I2C Start Address in r23
+                 i2cStart: 
+0001fa 940e 01e0 	call 	i2cDetect 
+0001fc 9508      	ret
+                 
+                 ; I2C Stop
+                 i2cStop: 
+0001fd e984      	ldi 	r24,TWISTOP 
+0001fe 9380 00bc 	sts 	TWCR,r24 
+000200 9508      	ret
+                 
+                 ; I2C Read
+                 ; Data returned in r27
+                 i2cRead: 
+000201 e854      	ldi 	r21,(1<<TWINT) | (1<<TWEN) 
+000202 9350 00bc 	sts 	TWCR,r21 
+                 wait2: 
+000204 9150 00bc 	lds 	r21,TWCR 		; Read control register
+000206 ff57      	sbrs 	r21,TWINT 		; Wait until ready
+000207 cffc      	rjmp 	wait2 
+000208 91b0 00bb 	lds 	r27,TWDR 		; Read data
+00020a 9508      	ret
+                 
+                 ; reads data byte from slave into r24
+                 i2cReadACK: 
+00020b ec84      	ldi 	r24,TWIACK 		; ack = read more data
+00020c 9380 00bc 	sts 	TWCR,r24 
+00020e ebec      	ldi 	r30,TWCR 
+00020f e0f0      	ldi 	r31,0x00 
+                 ra1: 
+000210 8180      	ld 		r24,Z 
+000211 2388      	and 	r24,r24 
+000212 f7ec      	brge 	ra1 
+000213 9180 00bb 	lds 	r24,TWDR 
+000215 9508      	ret
+                 
+                 ; reads data byte from slave into r24
+                 i2cReadNACK: 
+000216 e884      	ldi 	r24,TWINACK 	; nack = not reading more data
+000217 9380 00bc 	sts 	TWCR,r24 
+000219 ebec      	ldi 	r30,TWCR 
+00021a e0f0      	ldi 	r31,0x00 
+                 rn1: 
+00021b 8180      	ld 		r24,Z 
+00021c 2388      	and 	r24,r24 
+00021d f7ec      	brge 	rn1 
+00021e 9180 00bb 	lds 	r24,TWDR 
+000220 9508      	ret
+                 
+                 ; I2C Write
+                 ; Data to write in r24
+                 i2cWrite: 
+000221 9380 00bb 	sts 	TWDR,r24 		; Load data into TWDR register
+000223 e884      	ldi 	r24,TWISEND 
+000224 9380 00bc 	sts 	TWCR,r24 		; Configure control register to send TWDR contents.
+000226 ebcc      	ldi 	r28,TWCR 
+000227 e0d0      	ldi 	r29,0x00 
+                 wr1: 
+000228 8188      	ld 		r24,Y 
+000229 2388      	and 	r24,r24 
+00022a f7ec      	brge 	wr1 
+00022b 9140 00b9 	lds 	r20,TWSR 
+00022d e081      	ldi 	r24,0x01 
+00022e 3246      	cpi 	r20,0x26 
+00022f f409      	brne 	wr2 
+000230 e080      	ldi 	r24,0x00 
+                 wr2: 
+000231 9508      	ret
+                 
+                 ; I2C Write Register
+                 ; Bus Address in r23,Device Register in r25,Data in r22
+                 i2cWriteRegister: 
+000232 940e 01fa 	call 	i2cStart 
+000234 2f89      	mov 	r24,r25 
+000235 940e 0221 	call 	i2cWrite 
+000237 2f86      	mov 	r24,r22 
+000238 940e 0221 	call 	i2cWrite 
+00023a 940e 01fd 	call 	i2cStop 
+00023c 9508      	ret
+                 
+                 ; I2C Read Register
+                 ; Bus address in r23, Device register in r25,
+                 i2cReadRegister: 
+00023d 2f67      	mov 	r22,r23 
+00023e 940e 01fa 	call 	i2cStart 
+000240 2f89      	mov 	r24,r25 
+000241 940e 0221 	call 	i2cWrite 
+000243 e071      	ldi 	r23,0x01 		; Restart as a READ operation
+000244 0f76      	add 	r23,r22 
+000245 940e 01fa 	call 	i2cStart 
+000247 940e 0216 	call 	i2cReadNACK 
+000249 2f68      	mov 	r22,r24 
+00024a 940e 01fd 	call 	i2cStop 
+00024c 2f86      	mov 	r24,r22 
+00024d 9508      	ret
+                 
+                 ; Write Multiple Bytes
+                 ; Bus Address in r23,Device Register in r25, Address Pointer r16,r17
+                 i2cWriteMulti: 
+00024e 940e 01fa 	call 	i2cStart 
+000250 2f89      	mov 	r24,r25 
+000251 940e 0221 	call 	i2cWrite 
+000253 9720      	sbiw 	r28,0x00 
+000254 f039      	breq 	wm1 
+                 	wm2: 
+000255 01f8      	movw 	r30,r16 		; Set address in Z
+000256 9181      	ld 		r24,Z+ 			; Get data then increment Z
+000257 018f      	movw 	r16,r30 		; Save Z register
+000258 940e 0221 	call 	i2cWrite 		; Write data
+00025a 9721      	sbiw 	r28,0x01 		; Decrement byte count
+00025b f7c9      	brne 	wm2 			; loop if not done
+                 wm1: 
+00025c 940e 01fd 	call 	i2cStop 
+00025e 9508      	ret
+                 .include "rtcds1307.asm"
+                 
+                 ;│░█▀▄░▀█▀░█▀▀░█▀▄░█▀▀░▀█░░▀▀█░▄▀▄░▀▀█░░░░█▀█░█▀▀░█▄█│
+                 ;│░█▀▄░░█░░█░░░█░█░▀▀█░░█░░░▀▄░█/█░▄▀░░░░░█▀█░▀▀█░█░█│
+                 ;│░▀░▀░░▀░░▀▀▀░▀▀░░▀▀▀░▀▀▀░▀▀░░░▀░░▀░░░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
+                 ;│░@student░no░N00427948░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
+                 ;└───────────────────────────────────────────────────┘
+                 
+                 .equ RTCADR = 0xd0 
+                 .equ SECONDS_REGISTER = 0x00 
+                 .equ MINUTES_REGISTER = 0x01 
+                 .equ HOURS_REGISTER = 0x02 
+                 .equ DAYOFWK_REGISTER = 0x03 
+                 .equ DAYS_REGISTER = 0x04 
+                 .equ MONTHS_REGISTER = 0x05 
+                 .equ YEARS_REGISTER = 0x06 
+                 .equ CONTROL_REGISTER = 0x07 
+                 .equ RAM_BEGIN = 0x08 
+                 .equ RAM_END = 0x3F 
+                 
+                 ds1307Init: 
+00025f ed70      	ldi 	r23,RTCADR 				; RTC Setup
+000260 940e 01fa 	call 	i2cStart 
+000262 ed70      	ldi 	r23,RTCADR 				; Initialize DS1307
+000263 e097      	ldi 	r25,CONTROL_REGISTER 
+000264 e060      	ldi 	r22,0x00 
+000265 940e 0232 	call 	i2cWriteRegister 
+000267 e090      	ldi 	r25, SECONDS_REGISTER 
+000268 e060      	ldi 	r22,0x00 				; Clear the Seconds_Register 
+000269 940e 0232 	call 	i2cWriteRegister 
+00026b e091      	ldi 	r25, MINUTES_REGISTER 
+00026c e060      	ldi 	r22,0x00 				; Clear the Minutes_Register 
+00026d 940e 0232 	call 	i2cWriteRegister 
+00026f 9508      	ret
+                 
+                 ; r23 RTC Address, r25 ds1307 Register, Return Data r24
+                 ds1307GetDateTime: 
+000270 ed70      	ldi r23,RTCADR 
+000271 940e 023d 	call i2cReadRegister 
+000273 9508      	ret 
+                 
+                 ; Setting the RTC time to 16 hours, 58 minutes, 11 seconds 
+                 setDS1307: 
+000274 ed70      	 ldi	r23,RTCADR 
+000275 e097      	 ldi 	r25,CONTROL_REGISTER 
+000276 e060      	 ldi 	r22,0x00 
+000277 940e 0232 	 call 	i2cWriteRegister
+000279 ed70      	 ldi 	r23,RTCADR 
+00027a e092      	 ldi 	r25,HOURS_REGISTER 
+00027b e166      	 ldi 	r22,0x16
+00027c 940e 0232 	 call 	i2cWriteRegister	  
+00027e ed70      	 ldi 	r23,RTCADR 
+00027f e091      	 ldi 	r25,MINUTES_REGISTER 
+000280 e568      	 ldi	r22,0x58
+000281 940e 0232 	 call 	i2cWriteRegister 
+000283 ed70      	 ldi 	r23,RTCADR 
+000284 e090      	 ldi 	r25,SECONDS_REGISTER 
+000285 e161      	 ldi 	r22,0x11
+000286 940e 0232 	 call 	i2cWriteRegister	  
+                 .include "adc.asm"
+000288 9508      
+                 ;│░█▀█░█▀▄░█▀▀░░░░█▀█░█▀▀░█▄█│
+                 ;│░█▀█░█░█░█░░░░░░█▀█░▀▀█░█░█│
+                 ;│░▀░▀░▀▀░░▀▀▀░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░│
+                 ;│░@student░no░N00427948░░░░░│
+                 ;└───────────────────────────┘
+                 
+                 initADC:
+000289 e480      	ldi		r24,1<<REFS0		; Sets the REFS0 to 1 for 5V vref
+00028a 9380 007c 	sts		ADMUX,r24
+00028c e887      	ldi		r24,0x87			; Enable ADC and select clock/128
+00028d 9380 007a 	sts		ADCSRA,r24
+00028f 9508      	ret
+                 
+                 ; Channel to read in r24
+                 ; Value returned in r24,r25
+                 readADCch:
+000290 e7ec      	ldi		r30,ADMUX
+000291 e0f0      	ldi		r31,0x00
+000292 8190      	ld		r25,Z
+000293 7087      	andi	r24,0x07			; makes sure channel 0-7
+000294 7f98      	andi	r25,0xF8			; clears bottom 3 bits before OR
+000295 2b89      	or		r24,r25
+000296 8380      	st		Z,r24
+000297 e7ea      	ldi		r30,ADCSRA
+000298 e0f0      	ldi		r31,0x00
+000299 8180      	ld		r24,Z
+00029a 6480      	ori		r24,0x40
+00029b 8380      	st		Z,r24
+                 poll:
+00029c 8180      	ld		r24,Z
+00029d fd86      	sbrc	r24,6				; Loop until conversion complete
+00029e cffd      	rjmp	poll
+00029f 9180 0078 	lds		r24,ADCL			; Read low and high byte
+0002a1 9190 0079 	lds		r25,ADCH
+                 .include "andisplay.asm"
+0002a3 9508      
+                 ;│░█▀█░█▀█░█▀▄░▀█▀░█▀▀░█▀█░█░░░█▀█░█░█░░░░█▀█░█▀▀░█▄█│
+                 ;│░█▀█░█░█░█░█░░█░░▀▀█░█▀▀░█░░░█▀█░░█░░░░░█▀█░▀▀█░█░█│
+                 ;│░▀░▀░▀░▀░▀▀░░▀▀▀░▀▀▀░▀░░░▀▀▀░▀░▀░░▀░░▀░░▀░▀░▀▀▀░▀░▀│
+                 ;│░@student░Akeem░Morgan░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
+                 ;│░@student░no░N00427948░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
+                 ;└───────────────────────────────────────────────────┘
+                 
+                 .equ ANI2CADR		= 0xe0
+                 .equ ANON			= 0x21
+                 .equ ANSTANDBY		= 0x20
+                 .equ ANDISPON		= 0x81
+                 .equ ANDISPOFF		= 0x80
+                 .equ ANBLINKON		= 0x85
+                 .equ ANBLINKOFF		= 0x81
+                 .equ ANDIM			= 0xe5
+                 .equ ANBLINKCMD		= 0x80
+                 .equ ANBLINKDISPON	= 0x01
+                 .equ ANBLINKROFF	= 0
+                 .equ ANBLINK2HZ		= 1
+                 .equ ANBLINK1HZ		= 2
+                 .equ ANBLINKHHZ		= 3
+                 .equ ANBRIGHTCMD	= 0xe0
+                 
+                 ; Alphanumeric Display Initialization
+                 initAN:
+0002a4 ee70      	ldi		r23,ANI2CADR			; HT16K33 I2C Address
+0002a5 940e 01fa 	call	i2cStart
+0002a7 e281      	ldi		r24,ANON
+0002a8 940e 0221 	call	i2cWrite
+0002aa 940e 01fd 	call	i2cStop
+0002ac 940e 01fa 	call	i2cStart
+0002ae e881      	ldi		r24,ANDISPON
+0002af 940e 0221 	call	i2cWrite
+0002b1 940e 01fd 	call	i2cStop
+0002b3 940e 01fa 	call	i2cStart
+0002b5 ee85      	ldi		r24,ANDIM
+0002b6 940e 0221 	call	i2cWrite
+0002b8 940e 01fd 	call	i2cStop
+0002ba e200      	ldi		r16, ' '
+0002bb e010      	ldi		r17,0
+0002bc 940e 02cb 	call	anWriteDigit
+0002be e200      	ldi		r16, ' '
+0002bf e011      	ldi		r17,1
+0002c0 940e 02cb 	call	anWriteDigit
+0002c2 e200      	ldi		r16, ' '
+0002c3 e012      	ldi		r17,2
+0002c4 940e 02cb 	call	anWriteDigit
+0002c6 e200      	ldi		r16, ' '
+0002c7 e013      	ldi		r17,3
+0002c8 940e 02cb 	call	anWriteDigit
+0002ca 9508      	ret
+                 
+                 ;	Write Digit - ASCII Character
+                 ;	Character in r16, Digit in r17
+                 anWriteDigit:
+0002cb ece8      	ldi		ZL,LOW(alphatable*2)	; Low byte of alphatable address
+0002cc e0f5      	ldi		ZH,HIGH(alphatable*2)	; High byte
+0002cd 5200      	subi	r16,' '
+0002ce 0f00      	lsl		r16
+0002cf 0fe0      	add		ZL,r16
+0002d0 e000      	ldi		r16,0
+0002d1 1ff0      	adc		ZH,r16
+0002d2 9125      	lpm		r18,Z+
+0002d3 9134      	lpm		r19,Z
+0002d4 ee70      	ldi		r23,ANI2CADR			; HT16K33 I2C Address
+0002d5 940e 01fa 	call	i2cStart
+0002d7 2f81      	mov		r24,r17					; Get digit to write
+0002d8 0f88      	add		r24,r24					; Set up digit register
+0002d9 940e 0221 	call	i2cWrite
+0002db 2f82      	mov		r24,r18
+0002dc 940e 0221 	call	i2cWrite
+0002de 2f83      	mov		r24,r19
+0002df 940e 0221 	call	i2cWrite
+0002e1 940e 01fd 	call	i2cStop
+0002e3 9508      	ret
+                 
+                 alphatable:
+0002e4 0000      .dw 0b0000000000000000	; Blank  
+0002e5 0006      .dw 0b0000000000000110	; !
+0002e6 0220      .dw 0b0000001000100000	; "
+0002e7 12ce      .dw 0b0001001011001110	; #
+0002e8 12ed      .dw 0b0001001011101101	; $
+0002e9 0c24      .dw 0b0000110000100100	; %
+0002ea 235d      .dw 0b0010001101011101	; &
+0002eb 0400      .dw 0b0000010000000000	; '
+0002ec 2400      .dw 0b0010010000000000	; (
+0002ed 0900      .dw 0b0000100100000000	; )
+0002ee 3fc0      .dw 0b0011111111000000	; *
+0002ef 12c0      .dw 0b0001001011000000	; +
+0002f0 0800      .dw 0b0000100000000000	; ,
+0002f1 00c0      .dw 0b0000000011000000	; -
+0002f2 0000      .dw 0b0000000000000000	; .
+0002f3 0c00      .dw 0b0000110000000000	; /
+0002f4 003f      .dw 0b0000000000111111	; 0
+0002f5 0006      .dw 0b0000000000000110	; 1
+0002f6 00db      .dw 0b0000000011011011	; 2
+0002f7 00cf      .dw 0b0000000011001111	; 3
+0002f8 00e6      .dw 0b0000000011100110	; 4
+0002f9 00ed      .dw 0b0000000011101101	; 5
+0002fa 00fd      .dw 0b0000000011111101	; 6
+0002fb 0007      .dw 0b0000000000000111	; 7
+0002fc 00ff      .dw 0b0000000011111111	; 8
+0002fd 00ef      .dw 0b0000000011101111	; 9
+0002fe 1200      .dw 0b0001001000000000	; :
+0002ff 0a00      .dw 0b0000101000000000	; ;
+000300 2400      .dw 0b0010010000000000	; <
+000301 00c8      .dw 0b0000000011001000	; =
+000302 0900      .dw 0b0000100100000000	; >
+000303 1083      .dw 0b0001000010000011	; ?
+000304 02bb      .dw 0b0000001010111011	; @
+000305 00f7      .dw 0b0000000011110111	; A
+000306 128f      .dw 0b0001001010001111	; B
+000307 0039      .dw 0b0000000000111001	; C
+000308 120f      .dw 0b0001001000001111	; D
+000309 00f9      .dw 0b0000000011111001	; E
+00030a 0071      .dw 0b0000000001110001	; F
+00030b 00bd      .dw 0b0000000010111101	; G
+00030c 00f6      .dw 0b0000000011110110	; H
+00030d 1200      .dw 0b0001001000000000	; I
+00030e 001e      .dw 0b0000000000011110	; J
+00030f 2470      .dw 0b0010010001110000	; K
+000310 0038      .dw 0b0000000000111000	; L
+000311 0536      .dw 0b0000010100110110	; M
+000312 2136      .dw 0b0010000100110110	; N
+000313 003f      .dw 0b0000000000111111	; O
+000314 00f3      .dw 0b0000000011110011	; P
+000315 203f      .dw 0b0010000000111111	; Q
+000316 20f3      .dw 0b0010000011110011	; R
+000317 00ed      .dw 0b0000000011101101	; S
+000318 1201      .dw 0b0001001000000001	; T
+000319 003e      .dw 0b0000000000111110	; U
+00031a 0c30      .dw 0b0000110000110000	; V
+00031b 2836      .dw 0b0010100000110110	; W
+00031c 2d00      .dw 0b0010110100000000	; X
+00031d 1500      .dw 0b0001010100000000	; Y
+00031e 0c09      .dw 0b0000110000001001	; Z
+00031f 0039      .dw 0b0000000000111001	; [
+000320 2100      .dw 0b0010000100000000	; 
+000321 000f      .dw 0b0000000000001111	; ]
+000322 0c03      .dw 0b0000110000000011	; ^
+000323 0008      .dw 0b0000000000001000	; _
+000324 0100      .dw 0b0000000100000000	; `
+000325 1058      .dw 0b0001000001011000	; a
+000326 2078      .dw 0b0010000001111000	; b
+000327 00d8      .dw 0b0000000011011000	; c
+000328 088e      .dw 0b0000100010001110	; d
+000329 0858      .dw 0b0000100001011000	; e
+00032a 0071      .dw 0b0000000001110001	; f
+00032b 048e      .dw 0b0000010010001110	; g
+00032c 1070      .dw 0b0001000001110000	; h
+00032d 1000      .dw 0b0001000000000000	; i
+00032e 000e      .dw 0b0000000000001110	; j
+00032f 3600      .dw 0b0011011000000000	; k
+000330 0030      .dw 0b0000000000110000	; l
+000331 10d4      .dw 0b0001000011010100	; m
+000332 1050      .dw 0b0001000001010000	; n
+000333 00dc      .dw 0b0000000011011100	; o
+000334 0170      .dw 0b0000000101110000	; p
+000335 0486      .dw 0b0000010010000110	; q
+000336 0050      .dw 0b0000000001010000	; r
+000337 2088      .dw 0b0010000010001000	; s
+000338 0078      .dw 0b0000000001111000	; t
+000339 001c      .dw 0b0000000000011100	; u
+00033a 2004      .dw 0b0010000000000100	; v
+00033b 2814      .dw 0b0010100000010100	; w
+00033c 28c0      .dw 0b0010100011000000	; x
+00033d 200c      .dw 0b0010000000001100	; y
+00033e 0848      .dw 0b0000100001001000	; z
+00033f 0949      .dw 0b0000100101001001	; {
+000340 1200      .dw 0b0001001000000000	; |
+000341 2489      .dw 0b0010010010001001	; }
+000342 0520      .dw 0b0000010100100000	; ~
+000343 3fff      
+                 start:
+000344 e008      	ldi		r16,HIGH(RAMEND)	; Initialize the stack pointer
+000345 bf0e      	out		sph,r16
+000346 ef0f      	ldi		r16,LOW(RAMEND)
+000347 bf0d      	out		spl,r16	
+000348 940e 0113 	call	initPorts			; I/O Pin Initialization
+00034a 940e 018b 	call	initUSART0			; USART Initialization
+00034c 940e 01d6 	call	i2cInit				; I2C Initialization
+00034e 940e 025f 	call	ds1307Init			; DS1307 Initialization (RTC)
+000350 940e 0274 	call	setDS1307			; Set time...?
+000352 940e 0289 	call 	initADC				; A/D Converter
+000354 940e 02a4 	call 	initAN 				; Alphanumeric Display
+000356 940c 038e 	jmp		startstate
+                 
+                 
+                 ; Main processing loop
+                 ;======================	
+                 loop:
+000358 940e 03f1 	call	updateTick			; Check the time
+                 
+                 
+                 ; Check the inputs
+                 ;==================
+                 	; Is Door open (=0)?	
+00035a 9b4b      	sbis	PIND,DOOR			; DOOR = Pin number 3 of Port D
+00035b 940c 03b6 	jmp		suspend
+00035d 985f      	cbi 	PORTD,LIGHT 		; Light off
+                 
+                 	; Is Cancel key pressed (=0)?
+00035e 994c      	sbic	PIND,CANCEL			; CANCEL = Pin number 4 of Port D
+00035f 940c 0368 	jmp		ss0
+000361 9a5d      	sbi		PORTD,BEEPER 		; Beeper on
+                 stay:	
+000362 9b4c      	sbis 	PIND,CANCEL
+000363 940c 0362 	jmp 	stay
+000365 985d      	cbi 	PORTD,BEEPER 		; Beeper off
+000366 940c 039a 	jmp 	idle
+                 
+                 	; Is Start Stop key pressed (=0)?
+                 ss0:
+000368 9180 0100 	lds 	r24,cstate
+00036a 994a      	sbic	PIND,STSP			; STSP = Pin number 2 of Port D
+00036b 940c 037f 	jmp 	joy0
+00036d 9a5d      	sbi		PORTD,BEEPER 		; Beeper on
+                 wait:	
+00036e 9b4a      	sbis 	PIND,STSP
+00036f 940c 036e 	jmp 	wait
+000371 985d      	cbi 	PORTD,BEEPER 		; Beeper off
+000372 3083      	cpi 	r24,COOKS
+000373 f0c1      	breq 	jmpToSuspend 		; if the state was COOKS, go to suspend
+000374 9100 0105 	lds 	r16,seconds
+000376 3000      	cpi 	r16,0 				; Check if cook time is zero
+000377 f011      	breq 	zero1
+000378 940c 03ad 	jmp  	cook
+                 zero1:
+00037a 9100 0106 	lds 	r16,seconds+1
+00037c f581      	brne 	cook
+00037d 940c 039a 	jmp  	idle
+                 
+                 	; Check the joystick
+                 joy0:
+00037f 9180 0100 	lds 	r24,cstate
+000381 3083      	cpi 	r24,COOKS
+000382 f2a9      	breq 	loop
+000383 9828      	cbi		PORTB,HEATER		; Heater off
+000384 e000      	ldi 	r16,0x00
+000385 bd07      	out 	OCR0A,r16 			; Motor	off
+000386 940e 04c9 	call 	joystickInputs
+000388 3090      	cpi 	r25,0 				; 0 = not centered, shifted | 1 = centered, not shifted
+000389 f1e1      	breq 	dataentry
+00038a 940c 0358 	jmp 	loop
+                 
+                 jmpToSuspend:
+00038c 940c 03b6 	jmp 	suspend				; moved due to "relative jmp out of reach"
+                 
+                 ; State routines
+                 ;====================
+                 startstate:						
+00038e e080      	ldi		r24,STARTS			; Set cstate to STARTS
+00038f 9380 0100 	sts		cstate,r24			; Start state tasks
+000391 e080      	ldi 	r24,0x00
+000392 9380 0107 	sts  	sec1,r24			; Set sec1 to 0 
+000394 9380 0105 	sts 	seconds,r24 		; Set seconds to 0	
+000396 9380 0106 	sts 	seconds+1,r24		; Set seconds+1 to 0 
+000398 940c 0358 	jmp		loop
+                 	
+                 idle:
+00039a e081      	ldi		r24,IDLES			; Set cstate to IDLES
+00039b 9380 0100 	sts		cstate,r24			; Do idle state tasks
+00039d 9828      	cbi		PORTB,HEATER		; Heater off
+00039e 9b4b      	sbis	PIND,DOOR			; DOOR = Pin number 3 of Port D (0 = open)
+00039f 940c 03a4 	jmp 	lightOnIdle
+0003a1 985f      	cbi		PORTD,LIGHT			; Light off
+0003a2 940c 03a5 	jmp 	continueIdle
+                 lightOnIdle:
+0003a4 9a5f      	sbi		PORTD,LIGHT 		; Light on 
+                 continueIdle:
+0003a5 e000      	ldi 	r16,0x00
+0003a6 bd07      	out 	OCR0A,r16 			; Turn off the motor
+0003a7 9300 0105 	sts 	seconds,r16			; Set seconds to 0 (Clears the cook time)
+0003a9 9300 0106 	sts 	seconds+1,r16		; Set seconds+1 to 0 (Clears the cook time)
+0003ab 940c 0358 	jmp		loop				
+                 
+                 cook:
+0003ad e083      	ldi		r24,COOKS			; Set cstate to COOKS
+0003ae 9380 0100 	sts		cstate,r24			; Do cook state tasks
+0003b0 985f      	cbi		PORTD,LIGHT			; Light off
+0003b1 9a28      	sbi		PORTB,HEATER		; Heater on
+0003b2 e203      	ldi 	r16,0x23			; 13% duty cycle
+0003b3 bd07      	out 	OCR0A,r16 			; Turn on the motor	
+0003b4 940c 0358 	jmp		loop				
+                 
+                 suspend:
+0003b6 e084      	ldi		r24,SUSPENDS		; Set cstate to SUSPENDS
+0003b7 9380 0100 	sts		cstate,r24			; Do suspend state tasks
+0003b9 9828      	cbi		PORTB,HEATER		; Heater off
+0003ba 985d      	cbi		PORTD,BEEPER 		; Beeper off
+0003bb e000      	ldi 	r16,0x00
+0003bc bd07      	out 	OCR0A,r16 			; Turn off the motor	
+0003bd 9b4b      	sbis	PIND,DOOR			; DOOR = Pin number 3 of Port D (0 = open)'
+0003be 940c 03c3 	jmp 	lightOnSuspend
+0003c0 985f      	cbi		PORTD,LIGHT			; Light off
+0003c1 940c 03c4 	jmp 	continueSuspend
+                 lightOnSuspend:
+0003c3 9a5f      	sbi		PORTD,LIGHT 		; Light on 
+                 continueSuspend:		
+0003c4 940c 0358 	jmp		loop
+                 	
+                 dataentry:
+0003c6 e082      	ldi 	r24,DATAS 			; Set cstate to DATAS
+0003c7 9380 0100 	sts 	cstate,r24 
+0003c9 91a0 0105 	lds 	r26,seconds 		; Get current cook time
+0003cb 91b0 0106 	lds 	r27,seconds+1 
+0003cd 9150 0102 	lds 	r21,joyx 
+0003cf 3857      	cpi 	r21,135 			; Check for time increment
+0003d0 f460      	brsh 	de1 
+0003d1 30b0      	cpi 	r27,0 				; Check upper byte for 0
+0003d2 f439      	brne 	de0 
+0003d3 30a0      	cpi 	r26,0 				; Check lower byte for 0
+0003d4 f049      	breq 	de2 
+0003d5 30aa      	cpi 	r26,10 
+0003d6 f418      	brsh 	de0 
+0003d7 e0a0      	ldi 	r26,0 
+0003d8 940c 03de 	jmp 	de2 
+                 de0: 
+0003da 971a      	sbiw 	r27:r26,10 			; Decrement cook time by 10 seconds
+0003db 940c 03de 	jmp 	de2 
+                 de1: 
+0003dd 961a      	adiw 	r27:r26,10 			; Increment cook time by 10 seconds
+                 de2: 
+0003de 93a0 0105 	sts 	seconds,r26 		; Store time
+0003e0 93b0 0106 	sts 	seconds+1,r27 
+0003e2 940e 041b 	call 	displayState 
+0003e4 940e 0134 	call 	delay1s 
+0003e6 940e 04c9 	call 	joystickInputs 
+0003e8 9150 0104 	lds 	r21,joys 
+0003ea 3050      	cpi 	r21,0 
+0003eb f2d1      	breq 	dataentry 			; Do data entry until joystick centred
+0003ec e084      	ldi 	r24,SUSPENDS 
+0003ed 9380 0100 	sts 	cstate,r24 
+0003ef 940c 0358 	jmp 	loop
+                 	
+                 ; Time Tasks
+                 ;============
+                 updateTick:
+0003f1 940e 012c 	call 	delay100ms 
+0003f3 985d      	cbi 	PORTD,BEEPER 		; Turn off beeper
+0003f4 9160 0107 	lds 	r22,sec1 			; Get minor tick time
+0003f6 306a      	cpi 	r22,10 				; 10 delays of 100 ms done?
+0003f7 f4e9      	brne 	ut2 
+0003f8 e060      	ldi 	r22,0 				; Reset minor tick
+0003f9 9360 0107 	sts 	sec1,r22 			; Do 1 second interval tasks
+0003fb 9170 0100 	lds 	r23,cstate 			; Get current state
+0003fd 3073      	cpi 	r23,COOKS 
+0003fe f4a1      	brne 	ut1 
+0003ff 91a0 0105 	lds 	r26,seconds 		; Get current cook time
+000401 91b0 0106 	lds 	r27,seconds+1 
+000403 95a3      	inc 	r26 
+000404 9711      	sbiw 	r27:r26,1 			; Decrement cook time by 1 second
+000405 f441      	brne 	ut3 
+                 	;jump to idle
+000406 e071      	ldi 	r23,IDLES 			; if cook time = 0, turn OFF the HEATER
+000407 9370 0100 	sts 	cstate,r23
+000409 9828      	cbi 	PORTB,HEATER 		; Heater off
+00040a e000      	ldi 	r16,0x00 			; Motor off
+00040b bd07      	out 	OCR0A,r16 
+00040c 940c 0413 	jmp 	ut1
+                 ut3: 
+00040e 9711      	sbiw 	r27:r26,1 			; Decrement/store cook time
+00040f 93a0 0105 	sts 	seconds,r26 
+000411 93b0 0106 	sts 	seconds+1,r27 
+                 ut1: 
+000413 940e 041b 	call 	displayState 
+                 ut2: 
+000415 9160 0107 	lds 	r22,sec1 
+000417 9563      	inc 	r22 
+000418 9360 0107 	sts 	sec1,r22 
+00041a 9508      	ret
+                 
+                 	
+                 ; Display Tasks
+                 ;===============
+                 displayState:
+00041b 940e 01a7 	call 	newline
+                 	
+                 	; cmsg1
+00041d eeec      	ldi 	zl,low(cmsg1<<1)		; low byte of cmsg1 to register Z (low)
+00041e e0f1      	ldi 	zh,high(cmsg1<<1)		; high byte of cmsg1 to register Z (high)
+00041f e001      	ldi 	r16,1 					; string in program memory
+000420 940e 01ae 	call 	putsUSART0				; send cmsg1
+                 	
+                 	; display time of day
+000422 940e 0436 	call 	displayTOD				; send the time of day HH:MM:SS
+                 	
+                 	; cmsg2
+000424 e0ee      	ldi 	zl,low(cmsg2<<1)		; low byte of cmsg2 to register Z (low)
+000425 e0f2      	ldi 	zh,high(cmsg2<<1)		; high byte of cmsg2 to register Z (high)
+000426 e001      	ldi 	r16,1 					; string in program memory
+000427 940e 01ae 	call 	putsUSART0				; send cmsg2
+                 	
+                 	; display cook time
+000429 940e 0488 	call 	displayCookTime 		; display the cook time in 5 digits
+00042b e1ec      	ldi 	zl,low(cmsg3<<1)		; low byte of cmsg3 to register Z (low)
+00042c e0f2      	ldi 	zh,high(cmsg3<<1)		; high byte of cmsg3 to register Z (high)
+00042d e001      	ldi 	r16,1 					; string in program memory
+00042e 940e 01ae 	call 	putsUSART0				; send cmsg3
+                 	
+                 	; Sends the current state
+000430 9100 0100 	lds 	r16,cstate				; retrieve current state
+000432 6300      	ori 	r16,0x30				; ASCII format
+000433 940e 0198 	call 	putchUSART0
+000435 9508      	ret			
+                 
+                 displayTOD:
+                 	; Send to Tera Term	
+                 	; Reading and Sending Hours from the RTC
+000436 e092      	ldi 	r25,HOURS_REGISTER		; r25 <= ds1307 Minutes_Register
+000437 940e 0270 	call 	ds1307GetDateTime		; Read the hours and return data to R24
+000439 2f18      	mov 	r17,r24 
+00043a 940e 0140  	call 	pBCDToASCII 			; convert to ASCII  
+00043c 2f01       	mov 	r16,r17 
+00043d 940e 0198  	call 	putchUSART0 			; send ASCII character
+00043f 2f02       	mov 	r16,r18 
+000440 940e 0198  	call 	putchUSART0 			; send ASCII character
+                  	
+                  	; Formatting...
+000442 e30a       	ldi 	r16,':' 				; send character ‘:’
+000443 940e 0198  	call 	putchUSART0
+                 
+                 	; Reading and Sending Minutes from the RTC
+000445 e091      	ldi 	r25,MINUTES_REGISTER	; r25 <= ds1307 Minutes_Register
+000446 940e 0270 	call 	ds1307GetDateTime		; Read the minutes and return data to R24
+000448 2f18      	mov 	r17,r24 
+000449 940e 0140  	call 	pBCDToASCII 			; convert to ASCII  
+00044b 2f01       	mov 	r16,r17 
+00044c 940e 0198  	call 	putchUSART0 			; send ASCII character 
+00044e 2f02       	mov 	r16,r18 
+00044f 940e 0198  	call 	putchUSART0 			; send ASCII character
+                  	
+                  	; Formatting...
+000451 e30a       	ldi 	r16,':' 				; send character ‘:’
+000452 940e 0198  	call 	putchUSART0 
+                 
+                 	; Reading and Sending Seconds from the RTC
+000454 e090      	ldi 	r25,SECONDS_REGISTER	; r25 <= ds1307 Seconds_Register
+000455 940e 0270 	call 	ds1307GetDateTime		; Read the seconds and return data to R24
+000457 2f18      	mov 	r17,r24 
+000458 940e 0140  	call 	pBCDToASCII 			; convert to ASCII  
+00045a 2f01       	mov 	r16,r17 
+00045b 940e 0198  	call 	putchUSART0 			; send ASCII character 
+00045d 2f02       	mov 	r16,r18 
+00045e 940e 0198  	call 	putchUSART0 			; send ASCII character
+                 
+                  	; Display ToD in IDLES only
+000460 9180 0100  	lds 	r24,cstate 				
+000462 3083       	cpi 	r24,COOKS
+000463 f119       	breq 	tod0
+000464 3084       	cpi 	r24,SUSPENDS
+000465 f109       	breq 	tod0
+000466 3082       	cpi 	r24,DATAS
+000467 f0f9       	breq 	tod0
+                 
+                  	; Send to alphanumeric display
+000468 e092      	ldi		r25,HOURS_REGISTER		; Get current time
+000469 940e 0270 	call	ds1307GetDateTime
+00046b 2f18      	mov		r17,r24
+00046c 940e 0140 	call	pBCDToASCII
+00046e 2f01      	mov		r16,r17
+00046f 2ef2      	mov		r15,r18
+000470 e010      	ldi		r17,0					; Most significant hours digit.
+000471 940e 02cb 	call	anWriteDigit
+000473 2d0f      	mov		r16,r15
+000474 e011      	ldi		r17,1
+000475 940e 02cb 	call	anWriteDigit
+000477 2d0f      	mov		r16,r15
+000478 e091      	ldi		r25,MINUTES_REGISTER	; Get current time
+000479 940e 0270 	call	ds1307GetDateTime
+00047b 2f18      	mov		r17,r24
+00047c 940e 0140 	call	pBCDToASCII
+00047e 2f01      	mov		r16,r17
+00047f 2ef2      	mov		r15,r18
+000480 e012      	ldi		r17,2					; Most significant minutes digit.
+000481 940e 02cb 	call	anWriteDigit
+000483 2d0f      	mov		r16,r15
+000484 e013      	ldi		r17,3
+000485 940e 02cb 	call	anWriteDigit
+                 tod0:
+000487 9508       	ret
+                 
+                 displayCookTime:
+                 	; Send to Tera Term	
+000488 9100 0105  	lds 	r16,seconds
+00048a 9110 0106  	lds 	r17,seconds+1
+00048c 940e 0156  	call 	itoa_short
+00048e e040       	ldi 	r20,0
+00048f 9340 010d  	sts 	tascii+5,r20			; 0
+000491 9340 010e  	sts 	tascii+6,r20			; 0
+000493 9340 010f  	sts 	tascii+7,r20			; 0
+000495 e0e8       	ldi 	zl,low(tascii)			; low byte of tascii to register Z (low)
+000496 e0f1       	ldi 	zh,high(tascii)			; higher byte of tascii to register Z (high)
+000497 e000      	ldi 	r16,0 					; string in RAM
+000498 940e 01ae 	call 	putsUSART0				; send tascii
+                 
+                 	; Display CookTime in COOKS, SUSPENDS, DATAS
+00049a 9180 0100 	lds 	r24,cstate
+00049c 3083      	cpi 	r24,COOKS
+00049d f021      	breq 	dct1
+00049e 3084      	cpi 	r24,SUSPENDS
+00049f f011      	breq 	dct1
+0004a0 3082      	cpi 	r24,DATAS
+0004a1 f531      	brne 	dct2
+                 
+                 	; Send to alphanumeric display
+                 dct1:
+0004a2 9100 0105 	lds		r16,seconds				; Get current timer seconds
+0004a4 9110 0106 	lds		r17,seconds+1
+0004a6 e32c      	ldi		r18,60					; 16-bit Divide by 60 seconds to get mm:ss
+0004a7 e030      	ldi		r19,0					; answer = mm, remainder = ss
+0004a8 940e 0168 	call	div1616
+0004aa 2c40      	mov		r4,r0					; Save mm in r4
+0004ab 2c52      	mov		r5,r2					; Save ss in r5
+0004ac 2d04      	mov		r16,r4					; Divide minutes by 10
+0004ad e02a      	ldi		r18,10
+0004ae 940e 017c 	call	div88
+0004b0 e300      	ldi		r16,'0'					; Convert to ASCII
+0004b1 0d00      	add		r16,r0					; Division answer is 10's minutes
+0004b2 e010      	ldi		r17,0
+0004b3 940e 02cb 	call	anWriteDigit			; Write 10's minutes digit
+0004b5 e300      	ldi		r16,'0'					; Convert ASCII
+0004b6 0d02      	add		r16,r2					; Division remainder is 1's minutes
+0004b7 e011      	ldi		r17,1
+0004b8 940e 02cb 	call	anWriteDigit			; Write 1's minutes digit
+0004ba 2d05      	mov		r16,r5					; Divide seconds by 10
+0004bb e02a      	ldi		r18,10
+0004bc 940e 017c 	call	div88
+0004be e300      	ldi		r16,'0'					; Convert to ASCII
+0004bf 0d00      	add		r16,r0					; Division answer is 10's seconds
+0004c0 e012      	ldi		r17,2
+0004c1 940e 02cb 	call	anWriteDigit			; Write 10's seconds digit
+0004c3 e300      	ldi		r16,'0'					; Convert to ASCII
+0004c4 0d02      	add		r16,r2					; Division remainder is 1's seconds
+0004c5 e013      	ldi		r17,3
+0004c6 940e 02cb 	call	anWriteDigit			; Write 1's seconds digit
+                 dct2:
+0004c8 9508      	ret
+                 
+                 joystickInputs:
+                 	; Save Most Significant 8 bits of Joystick X,Y
+0004c9 e080      	ldi 	r24,0x00 				; Read ch 0 Joystick Y
+0004ca 940e 0290 	call 	readADCch 
+0004cc 9592      	swap 	r25 
+0004cd 0f99      	lsl 	r25 
+0004ce 0f99      	lsl 	r25 
+0004cf 9586      	lsr 	r24 
+0004d0 9586      	lsr 	r24 
+0004d1 2b89      	or 		r24,r25 
+0004d2 9380 0103 	sts 	joyy,r24 
+0004d4 e081      	ldi 	r24,0x01 				; Read ch 1 Joystick X
+0004d5 940e 0290 	call 	readADCch 
+0004d7 9592      	swap 	r25 
+0004d8 0f99      	lsl 	r25 
+0004d9 0f99      	lsl 	r25 
+0004da 9586      	lsr 	r24 
+0004db 9586      	lsr 	r24 
+0004dc 2b89      	or 		r24,r25 
+0004dd 9380 0102 	sts 	joyx,r24 
+0004df e090      	ldi 	r25,0 					; Not centred
+0004e0 3783      	cpi 	r24,115 
+0004e1 f018      	brlo 	ncx 
+0004e2 3887      	cpi 	r24,135 
+0004e3 f408      	brsh 	ncx 
+0004e4 e091      	ldi 	r25,1 					; Centred
+                 ncx: 
+0004e5 9390 0104 	sts 	joys,r25 
+0004e7 9508      	ret 
+                 ;.include "iopins.asm"
+
+
+RESOURCE USE INFORMATION
+------------------------
+
+Notice:
+The register and instruction counts are symbol table hit counts,
+and hence implicitly used resources are not counted, eg, the
+'lpm' instruction without operands implicitly uses r0 and z,
+none of which are counted.
+
+x,y,z are separate entities in the symbol table and are
+counted separately from r26..r31 here.
+
+.dseg memory usage only counts static data declared with .byte
+
+ATmega328P register use summary:
+r0 :   8 r1 :   2 r2 :  16 r3 :   7 r4 :   2 r5 :   2 r6 :   0 r7 :   0 
+r8 :   0 r9 :   0 r10:   0 r11:   0 r12:   0 r13:   0 r14:   0 r15:   5 
+r16:  88 r17:  36 r18:  27 r19:   7 r20:  34 r21:  16 r22:  26 r23:  17 
+r24: 116 r25:  33 r26:  15 r27:  13 r28:   3 r29:   1 r30:  15 r31:  13 
+x  :   3 y  :   1 z  :  16 
+Registers used: 26 out of 35 (74.3%)
+
+ATmega328P instruction use summary:
+.lds  :   0 .sts  :   0 adc   :   4 add   :  12 adiw  :   1 and   :   5 
+andi  :   8 asr   :   0 bclr  :   0 bld   :   0 brbc  :   0 brbs  :   0 
+brcc  :   2 brcs  :   0 break :   0 breq  :  18 brge  :   5 brhc  :   0 
+brhs  :   0 brid  :   0 brie  :   0 brlo  :   3 brlt  :   0 brmi  :   0 
+brne  :  15 brpl  :   0 brsh  :   4 brtc  :   0 brts  :   0 brvc  :   0 
+brvs  :   0 bset  :   0 bst   :   0 call  :  98 cbi   :  12 cbr   :   0 
+clc   :   2 clh   :   0 cli   :   0 cln   :   0 clr   :   1 cls   :   0 
+clt   :   0 clv   :   0 clz   :   0 com   :   0 cp    :   0 cpc   :   0 
+cpi   :  28 cpse  :   0 dec   :   6 eor   :   0 fmul  :   0 fmuls :   0 
+fmulsu:   0 icall :   0 ijmp  :   0 in    :   4 inc   :   4 jmp   :  28 
+ld    :  10 ldd   :   0 ldi   : 155 lds   :  31 lpm   :   9 lsl   :   5 
+lsr   :   4 mov   :  36 movw  :   3 mul   :   0 muls  :   0 mulsu :   0 
+neg   :   0 nop   :   2 or    :   3 ori   :   7 out   :  14 pop   :   0 
+push  :   0 rcall :   5 ret   :  38 reti  :   0 rjmp  :   8 rol   :   6 
+ror   :   0 sbc   :   2 sbci  :   3 sbi   :   5 sbic  :   2 sbis  :   5 
+sbiw  :   5 sbr   :   0 sbrc  :   1 sbrs  :   3 sec   :   2 seh   :   0 
+sei   :   0 sen   :   0 ser   :   0 ses   :   0 set   :   0 sev   :   0 
+sez   :   0 sleep :   0 spm   :   0 st    :   5 std   :   0 sts   :  43 
+sub   :   5 subi  :   2 swap  :   4 tst   :   1 wdr   :   0 
+Instructions used: 51 out of 113 (45.1%)
+
+ATmega328P memory use summary [bytes]:
+Segment   Begin    End      Code   Data   Used    Size   Use%
+---------------------------------------------------------------
+[.cseg] 0x000000 0x0009d0   1762    262   2024   32768   6.2%
+[.dseg] 0x000100 0x000110      0     16     16    2048   0.8%
+[.eseg] 0x000000 0x000000      0      0      0    1024   0.0%
+
+Assembly complete, 0 errors, 1 warnings
